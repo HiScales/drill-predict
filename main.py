@@ -355,19 +355,30 @@ def select_uniform_grid_points_with_priority(site_poly, buildings, min_spacing, 
     # 第二步：智能选择建筑物角点和边中点（考虑间距约束）
     selected = []
     print("\n=== 智能选择建筑物特征点（角点+合规边中点） ===")
-    # 先选择所有角点
+    # 智能选择角点（考虑角点间距约束）
+    valid_corners = []
     for i, corner in enumerate(building_corners):
-        selected.append(corner)
-        print(f"选择角点 {i+1}: {corner}")
+        # 检查与已选角点的距离
+        too_close = False
+        for selected_corner in valid_corners:
+            dist = np.linalg.norm(np.array(corner) - np.array(selected_corner))
+            if dist < 5:  # 角点间距小于5米时只选择一个
+                too_close = True
+                print(f"跳过角点 {i+1}: {corner} (距离已选角点 {selected_corner} 太近: {dist:.2f}m < 5m)")
+                break
+        if not too_close:
+            valid_corners.append(corner)
+            print(f"选择角点 {i+1}: {corner}")
+    selected.extend(valid_corners)
     # 智能选择边中点
     valid_midpoints = []
     for i, mid in enumerate(building_midpoints):
-        # 跳过与角点重复的中点
-        if any(np.allclose(mid, corner, atol=1e-2) for corner in building_corners):
-            continue
-        # 检查与所有角点的距离
+        # 跳过与有效角点重复的中点
+        if any(np.allclose(mid, corner, atol=1e-2) for corner in valid_corners):
+                        continue
+        # 检查与有效角点的距离
         too_close = False
-        for corner in building_corners:
+        for corner in valid_corners:
             dist = np.linalg.norm(np.array(mid) - np.array(corner))
             if dist < min_spacing:
                 too_close = True
@@ -377,7 +388,7 @@ def select_uniform_grid_points_with_priority(site_poly, buildings, min_spacing, 
             valid_midpoints.append(mid)
             print(f"选择边中点 {i+1}: {mid}")
     selected.extend(valid_midpoints)
-    print(f"已选择 {len(selected)} 个建筑物特征点 (角点: {len(building_corners)}, 合规边中点: {len(valid_midpoints)})")
+    print(f"已选择 {len(selected)} 个建筑物特征点 (有效角点: {len(valid_corners)}, 合规边中点: {len(valid_midpoints)})")
     
     # 第三步：生成一层均匀网格点（间距=min_spacing）
     print(f"\n=== 生成均匀网格 ===")
@@ -408,10 +419,10 @@ def select_uniform_grid_points_with_priority(site_poly, buildings, min_spacing, 
 
     print(f"\n=== 最终结果 ===")
     print(f"总共选择 {len(selected)} 个点")
-    corner_count = len(building_corners)
-    mid_count = len(building_midpoints)
+    corner_count = len(valid_corners)
+    mid_count = len(valid_midpoints)
     grid_count = len(selected) - corner_count - mid_count
-    print(f"- 建筑物角点: {corner_count}个")
+    print(f"- 建筑物角点: {corner_count}个 (原始{len(building_corners)}个，间距约束后{corner_count}个)")
     print(f"- 边中点: {mid_count}个")
     print(f"- 网格补充点: {grid_count}个")
     site_area = site_poly.area
@@ -448,24 +459,108 @@ def train_drill_model(X, y):
 def select_points_with_uniform_grid(site_poly, buildings, min_spacing, max_spacing):
     return select_uniform_grid_points_with_priority(site_poly, buildings, min_spacing, max_spacing)
 
-def plot_drills(site_poly, buildings, real_drills, pred_drills, save_path):
-    plt.figure(figsize=(8, 8))
+def plot_drills(site_poly, buildings, real_drills, pred_drills, save_path, grid_candidates=None, rotation_angle=0, grid_spacing=None):
+    """带网格线的对比可视化 - 优化比例"""
+    plt.figure(figsize=(14, 12))
+    
+    # 绘制site边界
     x, y = site_poly.exterior.xy
-    plt.plot(x, y, 'k-', label='Site')
+    plt.plot(x, y, 'k-', linewidth=3, label='Site Boundary')
     
+    # 绘制建筑物
     if buildings and len(buildings) > 0:
-        for b in buildings:
+        for i, b in enumerate(buildings):
             bx, by = b.exterior.xy
-            plt.plot(bx, by, 'b-', label='Building')
+            plt.plot(bx, by, 'blue', linewidth=2, label='Building' if i == 0 else "")
     
+    # 绘制布孔网格线（如果提供了网格参数）
+    if grid_spacing is not None:
+        # 获取site边界
+        minx, miny, maxx, maxy = site_poly.bounds
+        
+        # 计算site中心点
+        center_x = (minx + maxx) / 2
+        center_y = (miny + maxy) / 2
+        
+        # 计算旋转后需要的网格范围（要足够大以覆盖旋转后的site）
+        diagonal = np.sqrt((maxx - minx)**2 + (maxy - miny)**2)
+        grid_range = diagonal * 1.2  # 留出余量
+        
+        # 生成网格线
+        steps = int(grid_range / grid_spacing) + 1
+        
+        # 绘制网格线
+        cos_theta = np.cos(rotation_angle)
+        sin_theta = np.sin(rotation_angle)
+        
+        # 绘制水平网格线
+        for i in range(-steps, steps + 1):
+            # 生成水平线的两个端点
+            base_x1 = -grid_range
+            base_y1 = i * grid_spacing
+            base_x2 = grid_range
+            base_y2 = i * grid_spacing
+            
+            # 应用旋转变换
+            x1 = center_x + (base_x1 * cos_theta - base_y1 * sin_theta)
+            y1 = center_y + (base_x1 * sin_theta + base_y1 * cos_theta)
+            x2 = center_x + (base_x2 * cos_theta - base_y2 * sin_theta)
+            y2 = center_y + (base_x2 * sin_theta + base_y2 * cos_theta)
+            
+            # 增强网格线可见性
+            plt.plot([x1, x2], [y1, y2], 'gray', alpha=0.4, linewidth=1.2)
+        
+        # 绘制垂直网格线
+        for j in range(-steps, steps + 1):
+            # 生成垂直线的两个端点
+            base_x1 = j * grid_spacing
+            base_y1 = -grid_range
+            base_x2 = j * grid_spacing
+            base_y2 = grid_range
+            
+            # 应用旋转变换
+            x1 = center_x + (base_x1 * cos_theta - base_y1 * sin_theta)
+            y1 = center_y + (base_x1 * sin_theta + base_y1 * cos_theta)
+            x2 = center_x + (base_x2 * cos_theta - base_y2 * sin_theta)
+            y2 = center_y + (base_x2 * sin_theta + base_y2 * cos_theta)
+            
+            # 增强网格线可见性
+            plt.plot([x1, x2], [y1, y2], 'gray', alpha=0.4, linewidth=1.2)
+        
+        # 绘制网格候选点（如果提供）- 调整大小和透明度
+        if grid_candidates is not None and len(grid_candidates) > 0:
+            grid_x = [pt[0] for pt in grid_candidates]
+            grid_y = [pt[1] for pt in grid_candidates]
+            plt.scatter(grid_x, grid_y, c='lightblue', marker='.', s=20, alpha=0.5, label='Grid Candidates')
+        
+        # 添加网格线说明
+        plt.text(0.02, 0.98, f'Grid Spacing: {grid_spacing}m', 
+                transform=plt.gca().transAxes, fontsize=10, 
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # 绘制真实钻孔点 - 调整大小
     if real_drills is not None and len(real_drills) > 0:
-        plt.scatter(real_drills[:, 0], real_drills[:, 1], c='g', marker='o', label='Real Drill')
-    if pred_drills is not None and len(pred_drills) > 0:
-        plt.scatter(pred_drills[:, 0], pred_drills[:, 1], c='r', marker='x', label='Pred Drill')
+        plt.scatter(real_drills[:, 0], real_drills[:, 1], c='green', marker='o', s=80, 
+                   edgecolors='darkgreen', linewidth=1.5, label='Real Drill Points', zorder=5)
     
-    plt.legend()
-    plt.title('Drill Point Prediction vs Real')
-    plt.savefig(save_path)
+    # 绘制预测钻孔点 - 调整大小
+    if pred_drills is not None and len(pred_drills) > 0:
+        plt.scatter(pred_drills[:, 0], pred_drills[:, 1], c='red', marker='x', s=120, 
+                   linewidth=2.5, label='Predicted Drill Points', zorder=6)
+    
+    plt.xlabel('X Coordinate (m)', fontsize=12)
+    plt.ylabel('Y Coordinate (m)', fontsize=12)
+    plt.title('Drill Point Prediction with Grid Visualization', fontsize=14, fontweight='bold')
+    plt.legend(fontsize=10, loc='upper right')
+    plt.grid(True, alpha=0.2)
+    plt.axis('equal')
+    
+    # 设置坐标轴范围，留出适当边距
+    margin = grid_spacing * 2 if grid_spacing else 10
+    plt.xlim(minx - margin, maxx + margin)
+    plt.ylim(miny - margin, maxy + margin)
+    
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
 def save_pred_to_excel(pred_points, save_path):
@@ -495,6 +590,14 @@ def main():
                 
                 # 使用智能网格布孔算法
                 print(f'项目 {project_id} 开始智能网格布孔...')
+                
+                # 计算site方向角度
+                rotation_angle = calculate_site_orientation(site_poly)
+                
+                # 生成网格候选点
+                grid_candidates = generate_rotated_grid(site_poly, min_spacing, rotation_angle)
+                
+                # 执行智能选择
                 pred_drills = select_points_with_uniform_grid(site_poly, buildings, min_spacing, max_spacing)
                 print(f'项目 {project_id} 布孔完成，共选择{len(pred_drills)}个点')
                 
@@ -536,12 +639,14 @@ def main():
                             print(f'  最大距离误差: {np.max(min_distances):.1f}m')
                             print(f'  最小距离误差: {np.min(min_distances):.1f}m')
                     
-                    plot_drills(site_poly, buildings, real_drills, pred_drills, f'result/{project_id}_compare.png')
+                    plot_drills(site_poly, buildings, real_drills, pred_drills, f'result/{project_id}_compare.png', 
+                               grid_candidates, rotation_angle, min_spacing)
                     print(f'对比图已保存: result/{project_id}_compare.png')
                     
                 except Exception as e:
                     print(f"Warning: 无法生成项目 {project_id} 的对比图: {str(e)}")
-                    plot_drills(site_poly, buildings, None, pred_drills, f'result/{project_id}_pred.png')
+                    plot_drills(site_poly, buildings, None, pred_drills, f'result/{project_id}_pred.png', 
+                               grid_candidates, rotation_angle, min_spacing)
                     print(f'预测图已保存: result/{project_id}_pred.png')
                 
                 print(f'项目 {project_id} 处理完成')
@@ -587,4 +692,4 @@ def main():
         print("发生异常：", e)
 
 if __name__ == '__main__':
-    main()                                                          
+    main()
