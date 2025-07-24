@@ -648,7 +648,7 @@ def main():
                     plot_drills(site_poly, buildings, None, pred_drills, f'result/{project_id}_pred.png', 
                                grid_candidates, rotation_angle, min_spacing)
                     print(f'预测图已保存: result/{project_id}_pred.png')
-                
+                 
                 print(f'项目 {project_id} 处理完成')
                 
             except Exception as e:
